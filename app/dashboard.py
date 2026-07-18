@@ -66,7 +66,7 @@ weekly_sales = get_series(df, selected_store, selected_family)
 # ---------------------------
 @st.cache_data
 def run_forecast(weekly_df):
-    model = Prophet()
+    model = Prophet(interval_width=0.95)
     model.add_regressor("onpromotion")
     model.add_regressor("oil_price")
     model.add_country_holidays(country_name="EC")
@@ -85,72 +85,43 @@ def run_forecast(weekly_df):
 
 forecast = run_forecast(weekly_sales)
 
-# ---------------------------
-# Headline metric + recommendation
-# ---------------------------
-# ---------------------------
-# Headline metric + recommendation
-# ---------------------------
 st.subheader(f"Forecast: Store {selected_store} — {selected_family}")
 
 next_week_forecast = forecast.iloc[-8]["yhat"]
-st.metric("Next Week Forecast (units)", f"{next_week_forecast:,.0f}")
+next_week_upper = forecast.iloc[-8]["yhat_upper"]
 
-# --- Asymmetric safety buffer ---
-# Understocking (running out) risks losing a customer entirely — a worse
-# outcome than overstocking (a bit of extra inventory sitting around).
-# To reflect that, we deliberately bias the recommendation UPWARD by a
-# safety margin, rather than treating both risks as equally costly.
-safety_margin_pct = st.sidebar.slider(
-    "Safety buffer (%) — extra stock to guard against under-predicting",
-    min_value=0, max_value=50, value=15
+st.metric("Next Week Forecast (typical)", f"{next_week_forecast:,.0f} units")
+st.caption(
+    f"90% confidence: actual demand is expected to stay below "
+    f"**{next_week_upper:,.0f} units** in most weeks."
 )
-buffered_forecast = next_week_forecast * (1 + safety_margin_pct / 100)
 
-difference = buffered_forecast - inventory
+# Order against the UPPER bound, not the average — this directly reduces
+# under-prediction, since it targets a demand level actual sales should
+# only rarely exceed, rather than the 50/50 average outcome.
+difference = next_week_upper - inventory
+
+st.subheader("📦 Recommended order")
 if difference > 0:
     st.warning(
-        f"Recommended order: {difference:,.0f} units "
-        f"(includes a {safety_margin_pct}% buffer above the {next_week_forecast:,.0f}-unit "
-        f"forecast, since running out risks losing customers)."
+        f"Recommended order: **{difference:,.0f} units** "
+        f"(based on the 90%-confidence demand ceiling of {next_week_upper:,.0f} units, "
+        f"since running out risks losing customers)."
     )
 else:
     st.success(
-        f"Current inventory ({inventory:,.0f}) covers the buffered demand estimate "
-        f"of {buffered_forecast:,.0f} units."
+        f"Current inventory ({inventory:,.0f}) already covers the 90%-confidence "
+        f"demand ceiling of {next_week_upper:,.0f} units."
     )
-# ---------------------------
-# Cost of overstock/understock
-# ---------------------------
-# ---------------------------
-# Was before the cost of the overstock/understock but the units we are working with doesnt have formal prices.
-# Optional: estimate dollar impact (user-provided assumption)
-# ---------------------------
-st.subheader("💰 Estimate dollar impact (optional)")
-st.caption(
-    "This dataset does not include real per-unit prices. If you'd like to see "
-    "an estimated dollar impact, enter your own price assumptions below."
-)
-
-show_cost = st.checkbox("Estimate dollar impact")
-if show_cost:
-    col1, col2 = st.columns(2)
-    with col1:
-        price_per_unit = st.number_input("Assumed price per unit ($)", min_value=0.0, step=0.10)
-    with col2:
-        spoilage_cost_per_unit = st.number_input("Assumed cost if unsold ($)", min_value=0.0, step=0.10)
-
-    if difference > 0:
-        st.info(f"Estimated lost sales if not restocked: ${difference * price_per_unit:,.2f}")
-    else:
-        st.info(f"Estimated waste cost of excess units: ${(-difference) * spoilage_cost_per_unit:,.2f}")
 
 # ---------------------------
 # Actual vs Forecast chart
 # ---------------------------
 combined = forecast.merge(weekly_sales, on="ds", how="left")
-combined.rename(columns={"y": "actual", "yhat": "predicted"}, inplace=True)
-
+combined.rename(
+    columns={"y": "actual", "yhat": "predicted", "yhat_upper": "predicted_upper"},
+    inplace=True
+)
 st.subheader("Actual vs Forecast")
 st.line_chart(combined.set_index("ds")[["actual", "predicted"]])
 
@@ -158,8 +129,10 @@ st.line_chart(combined.set_index("ds")[["actual", "predicted"]])
 # Model reliability check
 # ---------------------------
 st.subheader("How reliable is this model?")
-historical = combined.dropna(subset=["actual", "predicted"]).copy()
-historical["error"] = historical["predicted"] - historical["actual"]
+historical = combined.dropna(subset=["actual", "predicted_upper"]).copy()
+# Compare actual sales to the UPPER bound, since that's what we now use
+# for ordering — we want actual to rarely exceed this ceiling.
+historical["error"] = historical["predicted_upper"] - historical["actual"]
 
 mae = historical["error"].abs().mean()
 mean_bias = historical["error"].mean()
