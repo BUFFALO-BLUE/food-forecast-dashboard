@@ -28,18 +28,23 @@ merged = merged.merge(oil_filled, on="date", how="left")
 # ---------------------------
 # Step 3: Build a clean holiday flag
 # ---------------------------
-# Drop rows where the holiday was transferred away from this date —
-# a "transferred" holiday is treated like a normal working day.
-holidays_clean = holidays[holidays["transferred"] == False].copy()
+# Drop rows where the holiday was transferred AWAY from this date —
+# the original date becomes a normal day when transferred.
+non_transferred = holidays[holidays["transferred"] == False].copy()
 
-# Keep only actual holiday-type rows (ignore "Work Day" and "Bridge" for a simple flag)
-holidays_clean = holidays_clean[holidays_clean["type"] == "Holiday"]
+# Days that behave like a real holiday/atypical shopping day:
+# - Holiday: standard holiday
+# - Additional: extra day added onto a calendar holiday (e.g. Christmas Eve)
+# - Bridge: extra day off added to extend a long weekend
+# - Transfer: the row showing where a transferred holiday was ACTUALLY observed
+# NOTE: "Work Day" is deliberately excluded — it's a normally-off day (e.g. Saturday)
+# turned INTO a working day to pay back a Bridge day, so it behaves like a normal day.
+holiday_types = ["Holiday", "Additional", "Bridge", "Transfer"]
+actual_holidays = non_transferred[non_transferred["type"].isin(holiday_types)]
 
-# Just need the set of dates that are real holidays
-holiday_dates = set(holidays_clean["date"])
+holiday_dates = set(actual_holidays["date"])
 
 merged["is_holiday"] = merged["date"].isin(holiday_dates)
-
 # ---------------------------
 # Step 4: Save the combined file
 # ---------------------------

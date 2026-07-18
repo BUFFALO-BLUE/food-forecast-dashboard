@@ -88,34 +88,62 @@ forecast = run_forecast(weekly_sales)
 # ---------------------------
 # Headline metric + recommendation
 # ---------------------------
+# ---------------------------
+# Headline metric + recommendation
+# ---------------------------
 st.subheader(f"Forecast: Store {selected_store} — {selected_family}")
 
 next_week_forecast = forecast.iloc[-8]["yhat"]
-st.metric("Next Week Forecast (sales)", f"{next_week_forecast:,.0f}")
+st.metric("Next Week Forecast (units)", f"{next_week_forecast:,.0f}")
 
-difference = next_week_forecast - inventory
+# --- Asymmetric safety buffer ---
+# Understocking (running out) risks losing a customer entirely — a worse
+# outcome than overstocking (a bit of extra inventory sitting around).
+# To reflect that, we deliberately bias the recommendation UPWARD by a
+# safety margin, rather than treating both risks as equally costly.
+safety_margin_pct = st.sidebar.slider(
+    "Safety buffer (%) — extra stock to guard against under-predicting",
+    min_value=0, max_value=50, value=15
+)
+buffered_forecast = next_week_forecast * (1 + safety_margin_pct / 100)
+
+difference = buffered_forecast - inventory
 if difference > 0:
-    st.warning(f"Projected demand exceeds current inventory by {difference:,.0f} units.")
+    st.warning(
+        f"Recommended order: {difference:,.0f} units "
+        f"(includes a {safety_margin_pct}% buffer above the {next_week_forecast:,.0f}-unit "
+        f"forecast, since running out risks losing customers)."
+    )
 else:
-    st.success("Current inventory is sufficient for next week.")
-
+    st.success(
+        f"Current inventory ({inventory:,.0f}) covers the buffered demand estimate "
+        f"of {buffered_forecast:,.0f} units."
+    )
 # ---------------------------
 # Cost of overstock/understock
 # ---------------------------
-st.subheader("What does this decision cost?")
-col1, col2 = st.columns(2)
-with col1:
-    price_per_unit = st.number_input("Price per unit ($)", value=3.00, min_value=0.0, step=0.10)
-with col2:
-    spoilage_cost_per_unit = st.number_input("Cost if unsold ($)", value=1.00, min_value=0.0, step=0.10)
+# ---------------------------
+# Was before the cost of the overstock/understock but the units we are working with doesnt have formal prices.
+# Optional: estimate dollar impact (user-provided assumption)
+# ---------------------------
+st.subheader("💰 Estimate dollar impact (optional)")
+st.caption(
+    "This dataset does not include real per-unit prices. If you'd like to see "
+    "an estimated dollar impact, enter your own price assumptions below."
+)
 
-if difference > 0:
-    lost_sales_cost = difference * price_per_unit
-    st.error(f"Risk: Understocked — potential lost sales of ${lost_sales_cost:,.2f}")
-else:
-    excess_units = -difference
-    waste_cost = excess_units * spoilage_cost_per_unit
-    st.error(f"Risk: Overstocked — potential waste cost of ${waste_cost:,.2f}")
+show_cost = st.checkbox("Estimate dollar impact")
+if show_cost:
+    col1, col2 = st.columns(2)
+    with col1:
+        price_per_unit = st.number_input("Assumed price per unit ($)", min_value=0.0, step=0.10)
+    with col2:
+        spoilage_cost_per_unit = st.number_input("Assumed cost if unsold ($)", min_value=0.0, step=0.10)
+
+    if difference > 0:
+        st.info(f"Estimated lost sales if not restocked: ${difference * price_per_unit:,.2f}")
+    else:
+        st.info(f"Estimated waste cost of excess units: ${(-difference) * spoilage_cost_per_unit:,.2f}")
 
 # ---------------------------
 # Actual vs Forecast chart
