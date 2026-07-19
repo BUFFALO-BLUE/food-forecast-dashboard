@@ -62,27 +62,6 @@ def get_series(df, store_nbr, family, freq="W"):
 weekly_sales = get_series(df, selected_store, selected_family)
 
 
-# ---------------------------
-# Flat price assumption (dataset has no real price data)
-# ---------------------------
-ASSUMED_PRICE_PER_UNIT = 5.00  # flat placeholder — not from the dataset
-
-st.subheader(" Estimated dollar impact")
-st.caption(
-    f"This dataset has no real price data. Using a flat placeholder of "
-    f"${ASSUMED_PRICE_PER_UNIT:.2f} per unit just to illustrate financial impact."
-)
-
-if difference > 0:
-    st.error(
-        f"Potential lost sales: **${difference * ASSUMED_PRICE_PER_UNIT:,.2f}** "
-        f"({difference:,.0f} units short × ${ASSUMED_PRICE_PER_UNIT:.2f})"
-    )
-else:
-    st.error(
-        f"Potential waste cost: **${(-difference) * ASSUMED_PRICE_PER_UNIT:,.2f}** "
-        f"({-difference:,.0f} excess units × ${ASSUMED_PRICE_PER_UNIT:.2f})"
-    )
 
 
 # ---------------------------
@@ -138,6 +117,30 @@ else:
         f"demand ceiling of {next_week_upper:,.0f} units."
     )
 
+
+
+# ---------------------------
+# Flat price assumption (dataset has no real price data)
+# ---------------------------
+ASSUMED_PRICE_PER_UNIT = 5.00  # flat placeholder — not from the dataset
+
+st.subheader(" Estimated dollar impact")
+st.caption(
+    f"This dataset has no real price data. Using a flat placeholder of "
+    f"${ASSUMED_PRICE_PER_UNIT:.2f} per unit just to illustrate financial impact."
+)
+
+if difference > 0:
+    st.error(
+        f"Potential lost sales: **${difference * ASSUMED_PRICE_PER_UNIT:,.2f}** "
+        f"({difference:,.0f} units short × ${ASSUMED_PRICE_PER_UNIT:.2f})"
+    )
+else:
+    st.error(
+        f"Potential waste cost: **${(-difference) * ASSUMED_PRICE_PER_UNIT:,.2f}** "
+        f"({-difference:,.0f} excess units × ${ASSUMED_PRICE_PER_UNIT:.2f})"
+    )
+    
 # ---------------------------
 # Actual vs Forecast chart
 # ---------------------------
