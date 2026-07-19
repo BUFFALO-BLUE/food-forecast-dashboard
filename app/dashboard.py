@@ -186,20 +186,50 @@ historical["error"] = historical["predicted"] - historical["actual"]
 
 mae = historical["error"].abs().mean()
 mean_bias = historical["error"].mean()
-over_weeks = (historical["predicted"] > historical["actual"]).sum()
-under_weeks = (historical["predicted"] < historical["actual"]).sum()
+
+# Split into two groups: weeks where the model UNDER-predicted
+# (actual came in higher than forecast) and weeks where it OVER-predicted
+# (forecast came in higher than actual).
+under_predicted = historical[historical["predicted"] < historical["actual"]]
+over_predicted = historical[historical["predicted"] > historical["actual"]]
+
+# Average size of the miss, in EACH direction separately — this answers
+# "when it's wrong in this direction, how wrong is it, on average?"
+avg_under_prediction = (under_predicted["actual"] - under_predicted["predicted"]).mean()
+avg_over_prediction = (over_predicted["predicted"] - over_predicted["actual"]).mean()
+
+over_weeks = len(over_predicted)
+under_weeks = len(under_predicted)
 
 c1, c2, c3 = st.columns(3)
-c1.metric("Mean Absolute Error (MAE)", f"{mae:,.1f}")
+c1.metric("Mean Absolute Error (MAE)", f"{mae:,.1f} units")
 c2.metric("Weeks Over-Predicted", f"{over_weeks}/{len(historical)}")
 c3.metric("Weeks Under-Predicted", f"{under_weeks}/{len(historical)}")
 
-if mean_bias < 0:
-    st.warning(f"This model tends to UNDER-predict by ~{abs(mean_bias):,.1f} units on average.")
-elif mean_bias > 0:
-    st.info(f"This model tends to OVER-predict by ~{mean_bias:,.1f} units on average.")
+st.caption(f"On average, the forecast differs from actual sales by {mae:,.1f} units.")
+
+if under_weeks > 0:
+    st.warning(
+        f"When demand exceeds the forecast, it exceeds it by "
+        f"**{avg_under_prediction:,.1f} units** on average."
+    )
 else:
-    st.success("No consistent bias detected.")
+    st.caption("No weeks where demand exceeded the forecast.")
+
+if over_weeks > 0:
+    st.info(
+        f"When the forecast is higher than demand, it overestimates by "
+        f"**{avg_over_prediction:,.1f} units** on average."
+    )
+else:
+    st.caption("No weeks where the forecast exceeded actual demand.")
+
+if mean_bias < 0:
+    st.error(f"Overall, this model tends to **under-predict** by ~{abs(mean_bias):,.1f} units on average.")
+elif mean_bias > 0:
+    st.error(f"Overall, this model tends to **over-predict** by ~{mean_bias:,.1f} units on average.")
+else:
+    st.success("No consistent bias detected overall.")
 
 # ---------------------------
 # Forecast table
