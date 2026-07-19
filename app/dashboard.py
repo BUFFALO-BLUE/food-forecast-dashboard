@@ -151,21 +151,6 @@ estimated_family_prices = {
 default_family_price = 5.00
 price_per_unit = estimated_family_prices.get(selected_family, default_family_price)
 
-st.subheader("Estimated Dollar Impact")
-st.caption(
-    f"Estimated price for **{selected_family}**: \\${price_per_unit:.2f}/unit "
-    f"(anchored to real Safeway pricing where available; category-level estimate)."
-)
-
-if expected_leftover > 0:
-    st.info(f"Potential waste value: **\\${expected_leftover * price_per_unit:,.2f}**")
-
-if expected_lost_sales > 0:
-    st.warning(f"Potential lost revenue: **\\${expected_lost_sales * price_per_unit:,.2f}**")
-
-if expected_leftover == 0 and expected_lost_sales == 0:
-    st.success("Inventory is expected to closely match forecast demand.")
-
 
 # ---------------------------
 # Actual vs Forecast chart
@@ -218,6 +203,105 @@ else:
         f"Overall, the model leans toward over-predicting by about "
         f"{mean_bias:,.1f} units on average."
     )
+
+
+st.subheader("Estimated Dollar Impact")
+st.caption(
+    f"Estimated price for **{selected_family}**: \\${price_per_unit:.2f}/unit "
+    f"(anchored to real Safeway pricing where available; category-level estimate)."
+)
+
+# ---------------------------
+# Build year and month columns from historical actual-vs-forecast data
+# (historical = combined.dropna(subset=["actual", "predicted"]), defined earlier)
+# ---------------------------
+historical["year"] = historical["ds"].dt.year
+historical["month"] = historical["ds"].dt.month_name()
+
+# Per-row excess/shortage units (0 if not applicable that week)
+historical["excess_units"] = (historical["predicted"] - historical["actual"]).clip(lower=0)
+historical["shortage_units"] = (historical["actual"] - historical["predicted"]).clip(lower=0)
+
+# Convert to dollars using this family's price
+historical["excess_value"] = historical["excess_units"] * price_per_unit
+historical["shortage_value"] = historical["shortage_units"] * price_per_unit
+
+# ---------------------------
+# Clearly labeled overall totals, with formulas shown
+# ---------------------------
+total_excess_units = historical["excess_units"].sum()
+total_excess_value = historical["excess_value"].sum()
+total_shortage_units = historical["shortage_units"].sum()
+total_shortage_value = historical["shortage_value"].sum()
+
+c1, c2 = st.columns(2)
+with c1:
+    st.metric("Over-Prediction Value (Excess Inventory)", f"\\${total_excess_value:,.2f}")
+    st.caption(
+        f"Formula: {total_excess_units:,.0f} total excess units × \\${price_per_unit:.2f}/unit "
+        f"= \\${total_excess_value:,.2f}. This is the value of inventory that historically "
+        f"went unsold because the forecast was higher than actual demand."
+    )
+with c2:
+    st.metric("Under-Prediction Value (Lost Sales)", f"\\${total_shortage_value:,.2f}")
+    st.caption(
+        f"Formula: {total_shortage_units:,.0f} total shortage units × \\${price_per_unit:.2f}/unit "
+        f"= \\${total_shortage_value:,.2f}. This is the value of sales historically missed "
+        f"because actual demand exceeded the forecast."
+    )
+
+# ---------------------------
+# Yearly breakdown
+# ---------------------------
+st.subheader("Yearly Breakdown")
+yearly = historical.groupby("year").agg(
+    excess_units=("excess_units", "sum"),
+    excess_value=("excess_value", "sum"),
+    shortage_units=("shortage_units", "sum"),
+    shortage_value=("shortage_value", "sum"),
+).reset_index()
+
+yearly_display = yearly.rename(columns={
+    "year": "Year",
+    "excess_units": "Excess Units",
+    "excess_value": "Excess Value ($)",
+    "shortage_units": "Shortage Units",
+    "shortage_value": "Shortage Value ($)",
+})
+st.dataframe(yearly_display.style.format({
+    "Excess Units": "{:,.0f}",
+    "Excess Value ($)": "${:,.2f}",
+    "Shortage Units": "{:,.0f}",
+    "Shortage Value ($)": "${:,.2f}",
+}))
+
+# ---------------------------
+# Monthly breakdown (aggregated across all years, to reveal seasonal pattern)
+# ---------------------------
+st.subheader("Monthly Breakdown (across all years)")
+month_order = ["January", "February", "March", "April", "May", "June",
+               "July", "August", "September", "October", "November", "December"]
+
+monthly = historical.groupby("month").agg(
+    excess_units=("excess_units", "sum"),
+    excess_value=("excess_value", "sum"),
+    shortage_units=("shortage_units", "sum"),
+    shortage_value=("shortage_value", "sum"),
+).reindex(month_order).reset_index()
+
+monthly_display = monthly.rename(columns={
+    "month": "Month",
+    "excess_units": "Excess Units",
+    "excess_value": "Excess Value ($)",
+    "shortage_units": "Shortage Units",
+    "shortage_value": "Shortage Value ($)",
+})
+st.dataframe(monthly_display.style.format({
+    "Excess Units": "{:,.0f}",
+    "Excess Value ($)": "${:,.2f}",
+    "Shortage Units": "{:,.0f}",
+    "Shortage Value ($)": "${:,.2f}",
+}))
 
 # --- Inventory Impact ---
 st.subheader("Inventory Impact")
