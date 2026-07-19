@@ -328,24 +328,150 @@ st.dataframe(weekly_detail_display.style.format({
     "Shortage Units": "{:,.0f}", "Shortage Value ($)": "${:,.2f}",
 }))
 
+# ---------------------------
+# Product tiers — grouped by how often a typical customer buys this
+# category. This grouping and the purchase frequency are business
+# judgment calls, not derived from the data (this dataset has no
+# individual customer purchase history).
+# ---------------------------
+product_tiers = {
+    "Tier 1 (Weekly purchase)": [
+        "DAIRY", "EGGS", "BREAD/BAKERY", "PRODUCE", "MEATS", "POULTRY",
+        "BEVERAGES", "GROCERY I", "GROCERY II", "FROZEN FOODS", "DELI",
+        "PREPARED FOODS", "SEAFOOD", "CLEANING", "HOME CARE",
+        "PERSONAL CARE", "BABY CARE", "PET SUPPLIES",
+    ],
+    "Tier 2 (Monthly purchase)": [
+        "BEAUTY", "CELEBRATION", "MAGAZINES", "LIQUOR,WINE,BEER",
+        "LAWN AND GARDEN",
+    ],
+    "Tier 3 (Yearly purchase)": [
+        "LADIESWEAR", "LINGERIE", "HOME APPLIANCES", "HARDWARE",
+        "AUTOMOTIVE", "PLAYERS AND ELECTRONICS", "BOOKS",
+        "SCHOOL AND OFFICE SUPPLIES", "HOME AND KITCHEN I",
+        "HOME AND KITCHEN II",
+    ],
+}
 
-# --- Inventory Impact ---
-st.subheader("Inventory Impact")
-c1, c2 = st.columns(2)
+# How many times per year a typical customer in this tier buys at all
+purchase_frequency = {
+    "Tier 1 (Weekly purchase)": 52,
+    "Tier 2 (Monthly purchase)": 12,
+    "Tier 3 (Yearly purchase)": 1,
+}
 
-if len(under_predicted) > 0:
-    c1.metric("Average Shortage", f"{avg_shortage:,.1f} units")
-    c1.caption("When demand exceeds the forecast, it exceeds it by this much, on average.")
-else:
-    c1.metric("Average Shortage", "N/A")
-    c1.caption("No weeks where demand exceeded the forecast.")
+# Assumed units a typical customer buys in ONE visit, by tier.
+# This is the key assumption in this model — everything below scales
+# from this number. Adjust here if a more informed estimate is available.
+units_per_customer_order = {
+    "Tier 1 (Weekly purchase)": 10,
+    "Tier 2 (Monthly purchase)": 5,
+    "Tier 3 (Yearly purchase)": 2,
+}
 
-if len(over_predicted) > 0:
-    c2.metric("Average Excess Inventory", f"{avg_excess:,.1f} units")
-    c2.caption("When the forecast exceeds demand, the store carries about this much extra, on average.")
-else:
-    c2.metric("Average Excess Inventory", "N/A")
-    c2.caption("No weeks where the forecast exceeded actual demand.")
+def get_tier(family):
+    for tier, families in product_tiers.items():
+        if family in families:
+            return tier
+    return "Tier 1 (Weekly purchase)"  # fallback if a family isn't explicitly listed
+
+selected_tier = get_tier(selected_family)
+freq = purchase_frequency[selected_tier]
+order_size = units_per_customer_order[selected_tier]
+
+# ---------------------------
+# Step 1: What is one loyal customer worth per year, in this category?
+# One order's worth of units x how many times/year they'd normally buy x price.
+# ---------------------------
+value_per_customer_per_year = order_size * freq * price_per_unit
+
+# ---------------------------
+# Step 2: How many "customer-equivalents" of demand went unmet historically?
+# Each week's shortage is expressed as a FRACTION (or multiple) of one
+# customer's typical order size, rather than always counting as exactly
+# one lost customer. A small shortage might be a fraction of a customer;
+# a big shortage might represent several customers' worth of unmet demand.
+# ---------------------------
+total_customers_affected = total_shortage_units / order_size
+
+# ---------------------------
+# Step 3: Total estimated value of lost future business, across all
+# historical shortage events, based on the customers affected and what
+# each one is worth per year.
+# ---------------------------
+total_annual_customer_loss_value = total_customers_affected * value_per_customer_per_year
+
+# ---------------------------
+# Combine with the immediate lost-sales value (the actual missed
+# transaction itself, calculated earlier) for a full picture.
+# ---------------------------
+total_under_prediction_impact = total_shortage_value + total_annual_customer_loss_value
+
+st.subheader("Understanding the Under-Prediction Risk")
+
+st.markdown(f"""
+**How this is calculated:** Under-prediction means actual demand exceeded the
+forecast — the store likely didn't have enough stock to meet demand that week.
+This section estimates two things: the value of sales missed in the moment,
+and the value of customer relationships that may be lost long-term if the
+store can't meet demand reliably.
+
+**Product tier:** {selected_family} is classified as **{selected_tier}**,
+assuming a typical customer buys about **{order_size} units** per visit,
+**{freq} times per year**.
+""")
+
+st.metric("1. Immediate Lost Sales Value (Historical Total)", f"\\${total_shortage_value:,.2f}")
+st.caption(
+    f"**Formula:** {total_shortage_units:,.0f} total shortage units × "
+    f"\\${price_per_unit:.2f}/unit = \\${total_shortage_value:,.2f}. "
+    f"This is the value of the sale missed in the moment — the direct, "
+    f"immediate cost of not having stock available."
+)
+
+st.metric("2. Value of One Loyal Customer, Per Year", f"\\${value_per_customer_per_year:,.2f}")
+st.caption(
+    f"**Formula:** {order_size} units per order × {freq} orders/year × "
+    f"\\${price_per_unit:.2f}/unit = \\${value_per_customer_per_year:,.2f}. "
+    f"This is what one typical customer in this category is worth annually, "
+    f"if they keep buying at their normal rate."
+)
+
+st.metric("3. Customer-Equivalents of Demand Unmet (Historical Total)", f"{total_customers_affected:,.2f}")
+st.caption(
+    f"**Formula:** {total_shortage_units:,.0f} total shortage units ÷ "
+    f"{order_size} units per typical order = {total_customers_affected:,.2f}. "
+    f"This expresses the total unmet demand as a number of 'customer orders' "
+    f"worth of stock — not necessarily whole customers, since a single bad "
+    f"week might only disappoint part of one customer's order, while a very "
+    f"large shortage could represent several customers' worth of demand."
+)
+
+st.metric("4. Estimated Long-Term Customer Loss Value", f"\\${total_annual_customer_loss_value:,.2f}")
+st.caption(
+    f"**Formula:** {total_customers_affected:,.2f} customer-equivalents × "
+    f"\\${value_per_customer_per_year:,.2f} value per customer/year = "
+    f"\\${total_annual_customer_loss_value:,.2f}. This estimates what it "
+    f"could cost if unmet demand causes customers to take their business "
+    f"elsewhere going forward, not just this one visit."
+)
+
+st.metric("Total Estimated Under-Prediction Impact", f"\\${total_under_prediction_impact:,.2f}")
+st.caption(
+    f"**Formula:** \\${total_shortage_value:,.2f} (immediate lost sales) + "
+    f"\\${total_annual_customer_loss_value:,.2f} (long-term customer loss) = "
+    f"\\${total_under_prediction_impact:,.2f}."
+)
+
+st.info(
+    "**Note on assumptions:** This dataset does not include individual "
+    "customer purchase history, so 'units per typical order' and purchase "
+    "frequency are estimated assumptions based on how often each product "
+    "category is normally bought, not measured directly from the data. "
+    "The immediate lost sales figure (#1) is grounded in real historical "
+    "sales data; the customer loss estimate (#4) is a business projection "
+    "built on top of that data."
+)
 
 # ---------------------------
 # Forecast table
