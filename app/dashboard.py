@@ -63,13 +63,12 @@ weekly_sales = get_series(df, selected_store, selected_family)
 
 
 
-
 # ---------------------------
-# Forecast (cached so switching dropdowns doesn't retrain unnecessarily)
+# Forecast (cached as a resource so the model only trains once)
 # ---------------------------
-@st.cache_data
+@st.cache_resource
 def run_forecast(weekly_df):
-    model = Prophet(interval_width=0.95)
+    model = Prophet(interval_width=0.90)
     model.add_regressor("onpromotion")
     model.add_regressor("oil_price")
     model.add_country_holidays(country_name="EC")
@@ -84,14 +83,14 @@ def run_forecast(weekly_df):
     future["oil_price"] = future["oil_price"].fillna(last_oil)
 
     forecast = model.predict(future)
-    return forecast
+    return model, forecast
 
-forecast = run_forecast(weekly_sales)
+model, forecast = run_forecast(weekly_sales)
 
 st.subheader(f"Forecast: Store {selected_store} — {selected_family}")
 
-next_week_forecast = forecast.iloc[-8]["yhat"]
-next_week_upper = forecast.iloc[-8]["yhat_upper"]
+next_week_forecast = forecast.iloc[-8]["yhat"]        # realistic/typical estimate
+next_week_upper = forecast.iloc[-8]["yhat_upper"]      # conservative ceiling, for ordering only
 
 st.metric("Next Week Forecast (typical)", f"{next_week_forecast:,.0f} units")
 st.caption(
@@ -99,75 +98,99 @@ st.caption(
     f"**{next_week_upper:,.0f} units** in most weeks."
 )
 
-# Order against the UPPER bound, not the average — this directly reduces
-# under-prediction, since it targets a demand level actual sales should
-# only rarely exceed, rather than the 50/50 average outcome.
-difference = next_week_upper - inventory
+# ---------------------------
+# Inventory decision
+# Ordering uses the UPPER bound (conservative) — this is the one place
+# yhat_upper should be used, since the goal here is avoiding stockouts.
+# ---------------------------
+recommended_order = max(next_week_upper - inventory, 0)
 
-st.subheader("📦 Recommended order")
-if difference > 0:
+st.subheader("📦 Recommended Order")
+if recommended_order > 0:
     st.warning(
-        f"Recommended order: **{difference:,.0f} units** "
-        f"(based on the 90%-confidence demand ceiling of {next_week_upper:,.0f} units, "
-        f"since running out risks losing customers)."
+        f"Order **{recommended_order:,.0f} units**. This uses the 90% demand "
+        f"ceiling ({next_week_upper:,.0f} units) to reduce the chance of running out."
     )
 else:
-    st.success(
-        f"Current inventory ({inventory:,.0f}) already covers the 90%-confidence "
-        f"demand ceiling of {next_week_upper:,.0f} units."
-    )
-
-
+    st.success("Current inventory already covers the 90% demand ceiling.")
 
 # ---------------------------
-# Flat price assumption (dataset has no real price data)
+# Expected leftover / lost sales
+# These use yhat (the realistic estimate), NOT yhat_upper — we want the
+# most likely outcome here, not the conservative ceiling.
 # ---------------------------
-ASSUMED_PRICE_PER_UNIT = 5.00  # flat placeholder — not from the dataset
+expected_leftover = max(inventory - next_week_forecast, 0)
+expected_lost_sales = max(next_week_forecast - inventory, 0)
+fill_rate = (min(inventory, next_week_forecast) / next_week_forecast * 100) if next_week_forecast > 0 else 100
 
-st.subheader(" Estimated dollar impact")
+st.subheader("Estimated Inventory Impact")
+c1, c2, c3 = st.columns(3)
+c1.metric("Expected Leftover", f"{expected_leftover:,.0f} units")
+c2.metric("Expected Lost Sales", f"{expected_lost_sales:,.0f} units")
+c3.metric("Expected Fill Rate", f"{fill_rate:.1f}%")
+
+# ---------------------------
+# Estimated price per unit, by product family
+# Anchored to real Safeway prices where available (eggs, dairy, produce,
+# meat); other categories use a reasonable estimate. These are category
+# averages, not exact per-SKU prices, since "family" is a broad category.
+# ---------------------------
+estimated_family_prices = {
+    "EGGS": 0.55, "BREAD/BAKERY": 3.50, "DAIRY": 4.50, "PRODUCE": 2.50,
+    "MEATS": 6.50, "POULTRY": 6.00, "SEAFOOD": 9.00, "DELI": 7.00,
+    "PREPARED FOODS": 6.00, "FROZEN FOODS": 4.50, "BEVERAGES": 3.00,
+    "LIQUOR,WINE,BEER": 12.00, "GROCERY I": 3.50, "GROCERY II": 3.00,
+    "CLEANING": 5.00, "HOME CARE": 5.00, "PERSONAL CARE": 6.00,
+    "BEAUTY": 8.00, "BABY CARE": 9.00, "PET SUPPLIES": 10.00,
+    "CELEBRATION": 5.00, "LADIESWEAR": 15.00, "LINGERIE": 15.00,
+    "HOME AND KITCHEN I": 8.00, "HOME AND KITCHEN II": 8.00,
+    "HOME APPLIANCES": 30.00, "HARDWARE": 10.00, "LAWN AND GARDEN": 12.00,
+    "AUTOMOTIVE": 15.00, "PLAYERS AND ELECTRONICS": 25.00,
+    "SCHOOL AND OFFICE SUPPLIES": 4.00, "BOOKS": 10.00, "MAGAZINES": 5.00,
+}
+default_family_price = 5.00
+price_per_unit = estimated_family_prices.get(selected_family, default_family_price)
+
+st.subheader("Estimated Dollar Impact")
 st.caption(
-    f"This dataset has no real price data. Using a flat placeholder of "
-    f"${ASSUMED_PRICE_PER_UNIT:.2f} per unit just to illustrate financial impact."
+    f"Estimated price for **{selected_family}**: \\${price_per_unit:.2f}/unit "
+    f"(anchored to real Safeway pricing where available; category-level estimate)."
 )
 
-if difference > 0:
-    st.error(
-        f"Potential lost sales: **${difference * ASSUMED_PRICE_PER_UNIT:,.2f}** "
-        f"({difference:,.0f} units short × ${ASSUMED_PRICE_PER_UNIT:.2f})"
-    )
-else:
-    st.error(
-        f"Potential waste cost: **${(-difference) * ASSUMED_PRICE_PER_UNIT:,.2f}** "
-        f"({-difference:,.0f} excess units × ${ASSUMED_PRICE_PER_UNIT:.2f})"
-    )
-    
+if expected_leftover > 0:
+    st.info(f"Potential waste value: **\\${expected_leftover * price_per_unit:,.2f}**")
+
+if expected_lost_sales > 0:
+    st.warning(f"Potential lost revenue: **\\${expected_lost_sales * price_per_unit:,.2f}**")
+
+if expected_leftover == 0 and expected_lost_sales == 0:
+    st.success("Inventory is expected to closely match forecast demand.")
+
+
 # ---------------------------
 # Actual vs Forecast chart
 # ---------------------------
 combined = forecast.merge(weekly_sales, on="ds", how="left")
-combined.rename(
-    columns={"y": "actual", "yhat": "predicted", "yhat_upper": "predicted_upper"},
-    inplace=True
-)
+combined.rename(columns={"y": "actual", "yhat": "predicted"}, inplace=True)
 st.subheader("Actual vs Forecast")
 st.line_chart(combined.set_index("ds")[["actual", "predicted"]])
 
 # ---------------------------
 # Model reliability check
+# Compares actual sales to the REALISTIC forecast (yhat), not the
+# inflated ordering ceiling — this gives a true measure of accuracy.
 # ---------------------------
 st.subheader("How reliable is this model?")
-historical = combined.dropna(subset=["actual", "predicted_upper"]).copy()
-# Compare actual sales to the UPPER bound, since that's what we now use
-# for ordering — we want actual to rarely exceed this ceiling.
-historical["error"] = historical["predicted_upper"] - historical["actual"]
+historical = combined.dropna(subset=["actual", "predicted"]).copy()
+historical["error"] = historical["predicted"] - historical["actual"]
 
 mae = historical["error"].abs().mean()
 mean_bias = historical["error"].mean()
-over_weeks = (historical["error"] > 0).sum()
-under_weeks = (historical["error"] < 0).sum()
+over_weeks = (historical["predicted"] > historical["actual"]).sum()
+under_weeks = (historical["predicted"] < historical["actual"]).sum()
 
 c1, c2, c3 = st.columns(3)
-c1.metric("Average Error (MAE)", f"{mae:,.1f}")
+c1.metric("Mean Absolute Error (MAE)", f"{mae:,.1f}")
 c2.metric("Weeks Over-Predicted", f"{over_weeks}/{len(historical)}")
 c3.metric("Weeks Under-Predicted", f"{under_weeks}/{len(historical)}")
 
@@ -194,16 +217,6 @@ Prophet breaks demand into: **trend** (long-term direction), **weekly pattern**
 **promotion**, **oil price**, and **holiday** regressors added to this model.
 """)
 
-model_for_plot = Prophet()
-model_for_plot.add_regressor("onpromotion")
-model_for_plot.add_regressor("oil_price")
-model_for_plot.add_country_holidays(country_name="EC")
-model_for_plot.fit(weekly_sales)
-future_plot = model_for_plot.make_future_dataframe(periods=8, freq="W")
-future_plot = future_plot.merge(weekly_sales[["ds", "onpromotion", "oil_price"]], on="ds", how="left")
-future_plot["onpromotion"] = future_plot["onpromotion"].fillna(weekly_sales["onpromotion"].iloc[-1])
-future_plot["oil_price"] = future_plot["oil_price"].fillna(weekly_sales["oil_price"].iloc[-1])
-full_forecast = model_for_plot.predict(future_plot)
-
-fig = model_for_plot.plot_components(full_forecast)
+# Reuse the already-trained model and forecast — no need to retrain
+fig = model.plot_components(forecast)
 st.pyplot(fig)
