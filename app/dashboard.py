@@ -275,33 +275,59 @@ st.dataframe(yearly_display.style.format({
     "Shortage Value ($)": "${:,.2f}",
 }))
 
+
 # ---------------------------
-# Monthly breakdown (aggregated across all years, to reveal seasonal pattern)
+# Year x Month breakdown — kept SEPARATE per year, not blended together,
+# since averaging Decembers across 2013-2017 hides year-specific patterns
+# (e.g. the 2016 earthquake).
 # ---------------------------
-st.subheader("Monthly Breakdown (across all years)")
+st.subheader("Month-by-Month Breakdown, Per Year")
+
 month_order = ["January", "February", "March", "April", "May", "June",
                "July", "August", "September", "October", "November", "December"]
 
-monthly = historical.groupby("month").agg(
-    excess_units=("excess_units", "sum"),
-    excess_value=("excess_value", "sum"),
-    shortage_units=("shortage_units", "sum"),
-    shortage_value=("shortage_value", "sum"),
-).reindex(month_order).reset_index()
+pivot_excess = historical.pivot_table(
+    index="year", columns="month", values="excess_value", aggfunc="sum", fill_value=0
+).reindex(columns=month_order, fill_value=0)
 
-monthly_display = monthly.rename(columns={
-    "month": "Month",
-    "excess_units": "Excess Units",
-    "excess_value": "Excess Value ($)",
-    "shortage_units": "Shortage Units",
-    "shortage_value": "Shortage Value ($)",
+pivot_shortage = historical.pivot_table(
+    index="year", columns="month", values="shortage_value", aggfunc="sum", fill_value=0
+).reindex(columns=month_order, fill_value=0)
+
+st.markdown("**Over-Prediction Value ($) — by Year and Month**")
+st.dataframe(pivot_excess.style.format("${:,.2f}"))
+
+st.markdown("**Under-Prediction Value ($) — by Year and Month**")
+st.dataframe(pivot_shortage.style.format("${:,.2f}"))
+
+# ---------------------------
+# Weekly drill-down — pick a specific year and month to see individual
+# weekly rows underneath the monthly total.
+# ---------------------------
+st.subheader("Weekly Drill-Down")
+
+years_available = sorted(historical["year"].unique())
+drill_year = st.selectbox("Select year", years_available, key="drill_year")
+
+months_available = [m for m in month_order if m in historical[historical["year"] == drill_year]["month"].unique()]
+drill_month = st.selectbox("Select month", months_available, key="drill_month")
+
+weekly_detail = historical[
+    (historical["year"] == drill_year) & (historical["month"] == drill_month)
+][["ds", "actual", "predicted", "excess_units", "excess_value", "shortage_units", "shortage_value"]]
+
+weekly_detail_display = weekly_detail.rename(columns={
+    "ds": "Week Of", "actual": "Actual", "predicted": "Predicted",
+    "excess_units": "Excess Units", "excess_value": "Excess Value ($)",
+    "shortage_units": "Shortage Units", "shortage_value": "Shortage Value ($)",
 })
-st.dataframe(monthly_display.style.format({
-    "Excess Units": "{:,.0f}",
-    "Excess Value ($)": "${:,.2f}",
-    "Shortage Units": "{:,.0f}",
-    "Shortage Value ($)": "${:,.2f}",
+
+st.dataframe(weekly_detail_display.style.format({
+    "Actual": "{:,.0f}", "Predicted": "{:,.1f}",
+    "Excess Units": "{:,.0f}", "Excess Value ($)": "${:,.2f}",
+    "Shortage Units": "{:,.0f}", "Shortage Value ($)": "${:,.2f}",
 }))
+
 
 # --- Inventory Impact ---
 st.subheader("Inventory Impact")

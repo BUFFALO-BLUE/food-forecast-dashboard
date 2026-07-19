@@ -10,7 +10,7 @@ def forecast_series(weekly_df, periods=8):
     too, not just historical ones. Since we don't know the true future
     values, we carry forward the last known value as a simple assumption.
     """
-    model = Prophet()
+    model = Prophet(interval_width=0.95)
 
     # Register external regressors BEFORE fitting
     model.add_regressor("onpromotion")
