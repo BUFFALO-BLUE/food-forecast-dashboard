@@ -176,60 +176,66 @@ st.subheader("Actual vs Forecast")
 st.line_chart(combined.set_index("ds")[["actual", "predicted"]])
 
 # ---------------------------
-# Model reliability check
+# Model reliability, reframed as business impact rather than raw stats.
 # Compares actual sales to the REALISTIC forecast (yhat), not the
-# inflated ordering ceiling — this gives a true measure of accuracy.
+# inflated ordering ceiling.
 # ---------------------------
-st.subheader("How reliable is this model?")
 historical = combined.dropna(subset=["actual", "predicted"]).copy()
 historical["error"] = historical["predicted"] - historical["actual"]
 
 mae = historical["error"].abs().mean()
 mean_bias = historical["error"].mean()
 
-# Split into two groups: weeks where the model UNDER-predicted
-# (actual came in higher than forecast) and weeks where it OVER-predicted
-# (forecast came in higher than actual).
 under_predicted = historical[historical["predicted"] < historical["actual"]]
 over_predicted = historical[historical["predicted"] > historical["actual"]]
 
-# Average size of the miss, in EACH direction separately — this answers
-# "when it's wrong in this direction, how wrong is it, on average?"
-avg_under_prediction = (under_predicted["actual"] - under_predicted["predicted"]).mean()
-avg_over_prediction = (over_predicted["predicted"] - over_predicted["actual"]).mean()
+avg_shortage = (under_predicted["actual"] - under_predicted["predicted"]).mean()
+avg_excess = (over_predicted["predicted"] - over_predicted["actual"]).mean()
 
-over_weeks = len(over_predicted)
-under_weeks = len(under_predicted)
+# --- Model Accuracy ---
+st.subheader("Model Accuracy")
+c1, c2 = st.columns(2)
+c1.metric("MAE", f"{mae:,.1f} units")
+c2.metric("Average Bias", f"{mean_bias:,.1f} units")
 
-c1, c2, c3 = st.columns(3)
-c1.metric("Mean Absolute Error (MAE)", f"{mae:,.1f} units")
-c2.metric("Weeks Over-Predicted", f"{over_weeks}/{len(historical)}")
-c3.metric("Weeks Under-Predicted", f"{under_weeks}/{len(historical)}")
+st.caption(
+    f"The forecast differs from actual sales by about {mae:,.1f} units "
+    f"on an average week."
+)
 
-st.caption(f"On average, the forecast differs from actual sales by {mae:,.1f} units.")
-
-if under_weeks > 0:
-    st.warning(
-        f"When demand exceeds the forecast, it exceeds it by "
-        f"**{avg_under_prediction:,.1f} units** on average."
+if abs(mean_bias) < 1:
+    st.write(
+        "The model shows almost no consistent bias, meaning over-predictions "
+        "and under-predictions balance out over time."
+    )
+elif mean_bias < 0:
+    st.write(
+        f"Overall, the model leans toward under-predicting by about "
+        f"{abs(mean_bias):,.1f} units on average."
     )
 else:
-    st.caption("No weeks where demand exceeded the forecast.")
-
-if over_weeks > 0:
-    st.info(
-        f"When the forecast is higher than demand, it overestimates by "
-        f"**{avg_over_prediction:,.1f} units** on average."
+    st.write(
+        f"Overall, the model leans toward over-predicting by about "
+        f"{mean_bias:,.1f} units on average."
     )
-else:
-    st.caption("No weeks where the forecast exceeded actual demand.")
 
-if mean_bias < 0:
-    st.error(f"Overall, this model tends to **under-predict** by ~{abs(mean_bias):,.1f} units on average.")
-elif mean_bias > 0:
-    st.error(f"Overall, this model tends to **over-predict** by ~{mean_bias:,.1f} units on average.")
+# --- Inventory Impact ---
+st.subheader("Inventory Impact")
+c1, c2 = st.columns(2)
+
+if len(under_predicted) > 0:
+    c1.metric("Average Shortage", f"{avg_shortage:,.1f} units")
+    c1.caption("When demand exceeds the forecast, it exceeds it by this much, on average.")
 else:
-    st.success("No consistent bias detected overall.")
+    c1.metric("Average Shortage", "N/A")
+    c1.caption("No weeks where demand exceeded the forecast.")
+
+if len(over_predicted) > 0:
+    c2.metric("Average Excess Inventory", f"{avg_excess:,.1f} units")
+    c2.caption("When the forecast exceeds demand, the store carries about this much extra, on average.")
+else:
+    c2.metric("Average Excess Inventory", "N/A")
+    c2.caption("No weeks where the forecast exceeded actual demand.")
 
 # ---------------------------
 # Forecast table
